@@ -1,0 +1,463 @@
+---
+title: "Haldane Model"
+author: "Stephan Peischl"
+date: "2024-05-21"
+runtime: shiny_prerendered
+output: learnr::tutorial
+---
+
+```{r setup, include=FALSE}
+library(learnr) # also loads shiny, rmarkdown and knitr!
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)     ## data wrangling + ggplot2
+library(ggbeeswarm)    ## beeswarm plots
+#library(gghalves)      ## off-set jitter --not on server -> not needed so far?
+library(RColorBrewer)
+
+### general theme
+theme_set(theme_bw())
+
+### custom colors
+#my_pal <- rcartocolor::carto_pal(n = 9, name = "Bold")
+colorpalette <- brewer.pal(5, name='Set1')
+
+### plotting functions: (need to be in either a "setup" or "data" context to be available for the "server" functions)
+## -> if you want to show them, feel free to put them in an R code chunk with (r, context="data") at the top
+# binom vs poisson plot
+plot.CX = function(c = 10^(-2),b = 100,max.k = 10)
+{
+lambda = c*b 
+k = 0:(max.k-1)
+
+PrC = dbinom(k,b,c)
+
+PrX = dpois(k,lambda)
+
+df = data.frame(Prob = c(PrC,PrX),k = k,var = rep(c("C","X"),each=max.k))
+
+ggplot(df) + 
+  geom_col(aes(x = as.factor(k),y = Prob,fill = var),position = 'dodge', alpha=0.7) + 
+  xlab('\nNumber of Crossover Events (k)') +
+  ylab('Probability P(k)\n') +
+  scale_fill_manual(values = colorpalette[c(2, 3)]) +
+  labs(fill = "Variable")
+}
+
+# simulated crossover events (histogram)
+plot.CO <- function(COs, Hotspot, n) {
+  ggplot() +
+    geom_histogram(aes(x = COs, fill=Hotspot),binwidth = 0.5, alpha=0.8)+
+        scale_fill_manual(values = colorpalette[c(2, 1)]) +
+        ggtitle(paste('Crossover Events across', n, 'Windows')) +
+        xlab('Number of Crossover Events') +
+        ylab('Windows (count)')
+}
+
+# hotspots & critical line
+plot.HS <- function(window.id, COs, Hotspot, critical){
+  ggplot() + 
+    geom_point(aes(x = window.id,y =COs,col=Hotspot),size = 3,alpha = 0.5) + 
+      #geom_point(aes(x = window.id,y =COs),shape = 16,size = 3,alpha = 0.2) + 
+      geom_hline(aes(yintercept = critical),color = "firebrick",linewidth = 1.5,linetype = 2, alpha = 0.9) + 
+      scale_color_manual(values = colorpalette[c(2, 1)]) + 
+      xlab("Window ID") + 
+      ylab("crossover events")
+}
+
+```
+# Haldane Model for Recombination
+## Introduction
+### Crossovers - Recombination Across a Chromosome
+
+Recombination is a fundamental genetic process that plays a pivotal role in evolution by shuffling genetic material between chromosomes during meiosis. This process involves the exchange of DNA segments between homologous chromosomes, leading to the creation of new combinations of alleles and genetic diversity in offspring.
+
+Crossovers, also known as genetic recombination events, occur when two homologous chromosomes exchange segments of DNA during meiosis. These crossovers result in the formation of recombinant chromosomes containing a mixture of genetic material from each parent. The frequency and distribution of crossovers along chromosomes are influenced by various factors such as the physical structure of chromosomes, the presence of recombination hotspots, and regulatory mechanisms.
+
+<img src="images/CObio.png" style="width: 90%"/>
+
+
+### Haldane's Model
+
+Haldane's model, based on the Poisson distribution, provides a statistical framework for understanding the distribution of crossover events along chromosomes. According to this model, the number of crossovers occurring within a given genomic window follows a Poisson distribution, where the mean number of crossovers is proportional to the length of the window.
+
+The model relies on several assumptions:
+
+1. **Uniform Chromosomal Structure**: The model assumes a uniform physical structure of chromosomes, where recombination events occur randomly along the length of the chromosome.
+
+2. **Independent Crossover Events**: It assumes that crossover events are independent of each other within a given genomic window, meaning that the occurrence of one crossover does not influence the likelihood of another within the same window.
+
+3. **Steady Recombination Rate**: The model assumes a constant recombination rate per unit length of DNA. While this assumption may not hold true in all cases, it provides a useful approximation for analyzing recombination patterns.
+
+Given these assumptions, Haldane's model can be applied to real genomic datasets to identify recombination hotspots, which are regions of the genome with higher-than-expected crossover rates. In the context of a real dataset comprising 100 1Mb genomic windows in humans, we can use this model to identify outliers that deviate significantly from the expected distribution of crossover events within each window. These outliers may represent regions of the genome with unusual recombination patterns or structural variations that influence crossover frequency. By identifying and analyzing these outliers, researchers can gain insights into the genetic mechanisms underlying recombination and its evolutionary implications.
+
+
+## Modelling Crossovers
+
+___
+#### Learning Outcomes
+**Modelling Crossovers as a Binomial Process and Taking the Limit to the Poisson**:
+
+- Understand the basics of genetic recombination and crossover events during meiosis.
+- Learn about the binomial distribution as a model for the number of crossover events within a genomic window.
+- Explore the concept of taking the limit of the binomial distribution as the number of trials (crossover events) becomes large, leading to the Poisson distribution.
+- Gain insight into the assumptions underlying Haldane's model and its application to studying recombination patterns.
+
+___
+
+
+### Binomial Model
+We can model the number of crossovers during meiosis in a stretch of DNA using a binomial distributed random variable. 
+
+Let $c$ be the per base pair probability of a crossover event. We can reasonably assume that $c << 1$ (estimated crossover rates are usually on the order of $10^{-9} - 10^{-6}$). 
+
+We consider a stretch of DNA of length $b$ basepairs. If we assume that crossover events occur at each basepair with the same probability and crossover events are independent of each other, then the number of crossover events in a stretch of $b$ basepairs follows a Binomial distribution $B(c,b)$ and 
+$$P (C = k) = \binom{b}{k} c^k (1-c)^{b-k}.$$
+
+### Poisson Distribution
+For a large number of basepairs $b$ this becomes computationally very expensive. We therefore seek an approximation. We can reasonably assume that $c << 1$ and that $n$ is very large. 
+
+We define a new random variable $C_n$ that has the same expectation as $C$, namely $c*b$. We call the expected number of crossover events $\lambda = c*b$. Since $C_n$ should model the number of crossover events, we will again model it as a binomial random variable. But know we write it as $C_n ~ B(p,n)$ with $p = \lambda/n$. What does this mean? The expectation $E[C_n] = \lambda$ is the same as before, but the parameters of the binomial distribution $n$ and $p$ can change. For any choice of $n$ we now have a random variable that describes the number of crossover events that occur in a region of length $n$ basepairs such that the expected number of cross over events is the same as for our original variable $C$. The final step will be to let $n$ approach infinity and see what we get. 
+
+In plain words, we approximate a finite but very large number of basepairs by an infinite number of basepairs. This may sound weird, but it is a common mathematical trick because infinity is often easier to handle than very large numbers. The crucial part is that at the same time we adjust the per base pair cross over probability such that the expected behavior of the random variables $C$ and $C_n$ remains the same no matter what we choose for $n$. 
+
+
+We skip the mathematical details at this stage (they can be found here ....) but it can be shown that 
+$$\lim C_n \to X,$$ where
+$X$ is a Poisson distributed random variable with expectation $\lambda$.
+
+
+We start by simply looking at the individual probabilities
+$$P(C_n = k) = \frac {n!}{k! (n-k)!} p^k (1-p)^{n-k},$$ where
+$p = \lambda/n$, and comparing this to a Poisson distribution for various choices of $n$.
+
+Next  take the limit of $n \to \infty$:
+$$\lim_{n \to \infty } P(C_n = k) = \lim_{n \to \infty } \frac {n!}{k! (n-k)!} p^k (1-p)^{n-k}$$. 
+
+I'll omit the technical details of taking this limit, and just write down the final answer:
+$$\lim_{n \to \infty } P(C_n = k) = \frac{\lambda^k e^{-\lambda}} {k!}$$
+
+Note however, that this derivation doesn't involve any advanced mathematics beyond what you have learned in high school. A detailed derivation can be found here: **[...](insert.link)**
+Furthermore, I omit all details about what it actually means for a series of random numbers (our $C_n$) to converge to another random number. Instead look at this plot that shows the distribution of the original random variable $C$ (binomial with parameters $b$ and $c$) and the distribution of $X$ (Poisson with parameter $\lambda = b*c$).
+
+
+
+**In the following plot, we can see how the approximation is very accurate as soon as $c$ is sufficiently small.** 
+
+```{r, echo=FALSE}
+fluidPage(
+    fluidRow(h3('Binomial Model vs Poisson Distribution') ),
+    fluidRow(p('')),
+    fluidRow(
+    column(4, shinyWidgets::sliderTextInput("c","Per Base Crossover Probability (c)",
+                            choices=c(0.000000001, 0.00000001, 0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1),
+                            selected=0.1, grid = T)),
+    column(4, shinyWidgets::sliderTextInput("b","Length of DNA Stretch (b)",
+                            choices=c(10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000),
+                            selected=100, grid = T)),
+    column(4,sliderInput("k", "Maximum Crossover Events (max.k)", 0, 120, 20))),
+    fluidRow(plotOutput("CXplot")))
+```
+
+
+```{r, context="server", echo=FALSE}
+output$CXplot = renderPlot({
+  plot.CX(input$c, input$b, input$k)
+})
+```
+
+## Simulating Hotspots
+___
+#### Learning Outcomes
+
+**Using the Poisson Model to Identify Outliers in a Simulated Dataset and Learn about FDR (False Discovery Rate)**:
+
+- Simulate a dataset of genomic windows with known crossover rates.
+- Apply Haldane's Poisson model to predict the expected distribution of crossover events within each window.
+- Identify outliers in the simulated dataset by comparing observed crossover counts to the expected distribution.
+- Understand the concept of false discovery rate (FDR) and its importance in multiple hypothesis testing.
+- Learn how to control FDR to minimize false positive discoveries while identifying genuine outliers in the dataset.
+
+___
+
+In this part we illustrate how such simple models can be used to answer biological questions. We are going to use our model to simulate recombination "hotspots", that is region in which crossovers are more common than in the rest of the genome. 
+
+The following plots show simulated data. Each window is either “background” or “hotspot”. The red line shows the critical threshold above which we declare a window as a hotspot.
+
+**Set different model parameters and see how the accuracy of our prediction changes.**
+
+```{r echo = F}
+# this would usually be in a ui() function in a shiny app
+fluidPage(
+    fluidRow(p(''), h3('Parameters')), # some extra whitespace
+    fluidRow(
+      column(4, sliderInput('lambdaBG', 'Lambda Background', 0, 10, 5)), # can i add info on hover?
+      column(4, sliderInput('lambdaHS', 'Lambda Hotspot', 0, 20, 10)),
+      column(4, sliderInput('probHS', 'Probability of Hotspot', 0, 0.3, 0.01)) # percent instead of prob? or also textslider?
+      ),
+    fluidRow(
+      column(4, sliderInput('threshold', 'Significance Threshold', 0.95, 0.999, 0.99)), # change to some set values? (shinywidgets-textslider, see above)
+      column(4, sliderInput('n', 'Number of Windows', 10, 10000, 1000)), # here too?
+      column(4, p(''))
+    ),
+    fluidRow(h3('Simulated Crossover Events'), plotOutput('plotCO')))
+```
+
+### Finding Hotspots
+
+The following plot shows the simulated data. Each window is either 'background' or 'hotspot'. The red line shows the critical threshold above which we declare a window as a hotspot. 
+
+```{r echo=F}
+# this would usually be in a ui() function in a shiny app
+plotOutput('plotHS')
+
+fluidRow(column(4, h4('True Positive:'), textOutput('truePos')),
+      column(4, h4('Total Positive:'), textOutput('totPos')),
+      column(4, h4('False Discovery Rate (FDR):'), textOutput('FDR')))
+```
+### Expected vs. Observed Crossover Events
+```{r echo=F}
+plotOutput('plotEO')
+  
+```
+
+```{r, context="server", echo=FALSE}
+# this chunk is what usually appears in the server() part of a shiny app. whenever an input is changed, things are recalculated here (-> server-side!)
+crossOvers <- reactive({
+      true.rec.rate <- sample(size = input$n, c(input$lambdaBG,input$lambdaHS),
+                              prob=c(1-input$probHS,input$probHS),
+                              replace = T)
+      
+      df <- data.frame(window.id = 1:input$n, 
+                       COs = rpois(input$n, true.rec.rate), 
+                       Hotspot = as.factor(true.rec.rate > input$lambdaBG))
+      
+      lambda.background <- mean(df$COs)
+      critical <- qpois(c(input$threshold),lambda = lambda.background) # value at the 99th percentile
+      
+      df <- mutate(df, inferred.HS = COs > critical)
+      df <- mutate(df, true.rec = true.rec.rate)
+      df <- mutate(df, true.pos = ((inferred.HS == Hotspot) & (Hotspot == TRUE)))
+      df <- mutate(df, true.neg = ((inferred.HS == Hotspot) & (Hotspot != TRUE)))
+      df <- mutate(df, false.neg = ((inferred.HS != Hotspot) & (Hotspot == TRUE)))
+      df <- mutate(df, false.pos = ((inferred.HS != Hotspot) & (Hotspot != TRUE)))
+      df
+      })
+
+output$plotCO = renderPlot({
+  dat <- crossOvers()  # recalculate the dataset with the new input (needs to be inside the renderPlot function so shiny understands that the plotting depends on these inputs (I think))
+  plot.CO(dat$COs, dat$Hotspot, input$n)
+  })
+    
+output$plotHS = renderPlot({
+  dat <- crossOvers()
+  lambda.background = mean(dat$COs)
+  critical = qpois(c(input$threshold),lambda = lambda.background) # value at the 99th percentile
+  
+  plot.HS(dat$window.id, dat$COs, dat$Hotspot, critical)
+    })
+    
+output$totPos = renderText({
+  dat.CrossOvers <- crossOvers()
+  paste0(sum(dat.CrossOvers$inferred.HS))
+})
+
+output$truePos = renderText({
+  dat.CrossOvers <- crossOvers()
+  paste0(sum(dat.CrossOvers$true.pos))
+})
+
+output$FDR = renderText({
+  dat.CrossOvers <- crossOvers()
+  paste0(sum(dat.CrossOvers$false.pos)/sum(dat.CrossOvers$inferred.HS))
+})
+    
+output$plotEO = renderPlot({
+  dat.CrossOvers <- crossOvers()
+    ggplot(dat.CrossOvers) + 
+      geom_point(aes(x = window.id, y=COs, color=Hotspot), size = 3,alpha = 0.5) + 
+      geom_step(aes(x = window.id, y=true.rec), linewidth = 1,alpha = 1) + 
+      scale_color_manual(values = colorpalette[c(2,1)]) + 
+      xlab("Window ID") + 
+      ylab("exp. vs obs. crossover events")
+})
+```
+
+## Identifying Hotspots
+___
+#### Learning Outcomes
+**Apply it to Human Data and Learn about Real-world Applications of Math and Statistics**:
+
+- Apply Haldane's Poisson model to analyze real genomic data from human populations.
+- Gain practical experience in data analysis and interpretation using mathematical and statistical models.
+- Explore the significance of identifying recombination hotspots in understanding genetic diversity and evolution in human populations.
+- Understand the broader implications of using mathematical and statistical models in genomic research and its applications in medicine, agriculture, and evolutionary biology.
+
+___
+
+### Real Human Data!
+
+In this part we use the Haldane model to analyze some real human genomic data. 
+Let's have a look at the dataset first:
+
+```{r, context="data"}
+# load in the dataset
+dat <- read.csv("data_human_rec.csv")
+head(dat, 10)
+
+# how many windows do we have?
+length(dat$wind.id)
+```
+
+### Theoretical Distribution - what to expect?
+
+[simplified a little]
+```{r, context="data"}
+# berechne die theoretische Poisson Verteilung
+x.vals = 0:10
+
+# Hier schummle ich ein wenig und nehme den Mittelwert 
+# über alle windows mit 3 oder weniger COs 
+# der Sinn der übung ist ja nur zu zeigen
+# dass die daten annäherend Poisson verteilt sind
+# wenn wir hotspots rausnehmen
+# Note: recombination hotspots haben > 10 mal höhere 
+# recombiantion rate, das ist schon viel und beinflusst den fit 
+# ordentlich
+
+dat.hist = data.frame(x = x.vals,poisson = dpois(x.vals,lambda = mean(dat$COs[dat$COs<=3])))
+
+# das ist der mittelwert für die outlier-analyse
+
+lambda = mean(dat$COs)
+
+# critical value für 1 - 1/windows threshold
+crit = qpois(lambda,p = 0.99)
+```
+
+We can plot a histogram of crossover events per window (blue) and compare it to the poisson distribution (green):
+```{r}
+plot.histPoisson = function(dat, dat.hist, lambda){
+  ggplot() + 
+  geom_bar(data = dat,aes(x = COs,y = ..prop..),fill=colorpalette[2], alpha=0.8) + 
+  geom_point(data = dat.hist,aes(x=x.vals,y = poisson),
+             size=2, color=colorpalette[3], fill=alpha("#18171c", 0.4), alpha=0.7, shape=21, stroke=2)+
+  ylim(0,1) + 
+  ylab("Proportion (of Windows)") +
+  xlim(-0.5,10) +
+  xlab("Number of Crossover Events") +
+  theme_bw()
+}
+
+plot.histPoisson(dat, dat.hist, lambda)
+
+```
+
+Now we can see which windows get identified as hotspots at different significance thresholds:
+
+```{r, context="data"}
+# "skyline plot mit critical threshold"
+
+plot.skyline <- function(dat, crit){
+  dat %>%
+    ggplot(aes(x = wind.id,y = COs)) + 
+    #geom_point(col=colorpalette[1],alpha = 1) + 
+    geom_hline(aes(yintercept = crit+0.9),col="firebrick",linewidth = 1,lty=2)  +
+    theme_classic() +
+    geom_point( size=2, color=colorpalette[2], fill=alpha("#18171c", 0.4), alpha=0.7, shape=21, stroke=1) +
+    xlab("Window ID") +
+    ylab("Number of Crossovers")
+}
+
+```
+
+```{r, echo=F}
+#ui
+shinyWidgets::sliderTextInput("p","Significance Threshold (p)",
+                            choices=c(0.9, 0.95, 0.975, 0.99, 0.995, 0.999),
+                            selected=0.99, grid=T)
+#ui
+plotOutput("skyline")
+```
+
+
+```{r, context="server", echo=F}
+#server
+output$skyline <- renderPlot({
+  crit = qpois(lambda, p=input$p)
+  plot.skyline(dat, crit)
+})
+
+
+```
+
+
+
+
+
+## Exercise Options?
+
+---
+
+I just kept these from the learnr Template (once you install learnr, you can access the template by opening a new R Markdown file in R Studio). Might be cool to add some relevant exercise sections?
+
+---
+
+### Exercise 
+
+*Here's a simple exercise with an empty code chunk provided for entering the answer.*
+
+Write the R code required to add two plus two:
+
+```{r two-plus-two, exercise=TRUE}
+
+```
+
+### Exercise with Code
+
+*Here's an exercise with some prepopulated code as well as `exercise.lines = 5` to provide a bit more initial room to work.*
+
+Now write a function that adds any two numbers and then call it:
+
+```{r add-function, exercise=TRUE, exercise.lines = 5}
+add <- function() {
+  
+}
+```
+
+### Exercise with Hint
+
+*Here's an exercise where the chunk is pre-evaluated via the `exercise.eval` option (so the user can see the default output we'd like them to customize). We also add a "hint" to the correct solution via the chunk immediate below labeled `print-limit-hint`.*
+
+Modify the following code to limit the number of rows printed to 5:
+
+```{r print-limit, exercise=TRUE, exercise.eval=TRUE}
+mtcars
+```
+
+```{r print-limit-hint}
+head(mtcars)
+```
+
+### Quiz
+
+*You can include any number of single or multiple choice questions as a quiz. Use the `question` function to define a question and the `quiz` function for grouping multiple questions together.*
+
+Some questions to verify that you understand the purposes of various base and recommended R packages:
+
+```{r quiz}
+quiz(
+  question("Which package contains functions for installing other R packages?",
+    answer("base"),
+    answer("tools"),
+    answer("utils", correct = TRUE),
+    answer("codetools")
+  ),
+  question("Which of the R packages listed below are used to create plots?",
+    answer("lattice", correct = TRUE),
+    answer("tools"),
+    answer("stats"),
+    answer("grid", correct = TRUE)
+  )
+)
+```
+
